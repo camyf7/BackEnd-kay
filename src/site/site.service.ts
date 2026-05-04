@@ -60,7 +60,7 @@ export class SiteService {
     await this.prismaService.session.create({
       data: { userId: user.id, token, expiresAt, tenantId: user.tenantId },
     });
-    await this.createHistory(user.id, 'LOGIN', `Role: ${role}`);
+    await this.createHistory(user.id, user.tenantId, 'LOGIN', `Role: ${role}`);
     return { token };
   }
 
@@ -192,7 +192,7 @@ export class SiteService {
       action: 'create_or_update',
     });
     await this.notifyAdmins('New booking', `Appointment ${appointment.id} was created`);
-    await this.createHistory(userId, 'CREATE_APPOINTMENT', `Appointment ${appointment.id}`);
+    await this.createHistory(userId, tenant.id, 'CREATE_APPOINTMENT', `Appointment ${appointment.id}`);
     return { appointmentId: appointment.id, paymentId: payment.id };
   }
 
@@ -232,7 +232,7 @@ export class SiteService {
       idempotencyKey: `appointment-reschedule-${appointmentId}-v${appointment.version + 1}`,
       action: 'create_or_update',
     });
-    await this.createHistory(userId, 'RESCHEDULE_APPOINTMENT', `Appointment ${appointmentId}`);
+    await this.createHistory(userId, appointment.tenantId, 'RESCHEDULE_APPOINTMENT', `Appointment ${appointmentId}`);
     return { id: appointmentId };
   }
 
@@ -278,7 +278,7 @@ export class SiteService {
       idempotencyKey: `appointment-cancel-${appointmentId}-v${appointment.version + 1}`,
       action: 'cancel',
     });
-    await this.createHistory(userId, 'CANCEL_APPOINTMENT', `Appointment ${appointmentId}`);
+    await this.createHistory(userId, appointment.tenantId, 'CANCEL_APPOINTMENT', `Appointment ${appointmentId}`);
     return { id: updatedAppointment.id, refundCreated };
   }
 
@@ -307,27 +307,24 @@ export class SiteService {
         updatedAt: true,
       },
     });
-    
     if (!user) {
       throw new NotFoundException('User not found');
     }
-    
     return user;
   }
 
   public async updateClientProfile(
     userId: string,
-    data: { fullName?: string; email?: string }
+    data: { fullName?: string; email?: string },
   ): Promise<unknown> {
     if (data.email) {
       const existingUser = await this.prismaService.user.findFirst({
-        where: { email: data.email, id: { not: userId } }
+        where: { email: data.email, id: { not: userId } },
       });
       if (existingUser) {
         throw new BadRequestException('Email already in use');
       }
     }
-
     return this.prismaService.user.update({
       where: { id: userId },
       data: {
@@ -347,103 +344,73 @@ export class SiteService {
   public async changeClientPassword(
     userId: string,
     currentPassword: string,
-    newPassword: string
+    newPassword: string,
   ): Promise<void> {
     if (!currentPassword || !newPassword) {
       throw new BadRequestException('Current password and new password are required');
     }
-
-    const user = await this.prismaService.user.findUnique({
-      where: { id: userId },
-    });
-    
+    const user = await this.prismaService.user.findUnique({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException('User not found');
     }
-    
     const isValidPassword = await compare(currentPassword, user.passwordHash);
     if (!isValidPassword) {
       throw new UnauthorizedException('Current password is incorrect');
     }
-    
     if (newPassword.length < 6) {
       throw new BadRequestException('New password must be at least 6 characters long');
     }
-    
     const newPasswordHash = await hash(newPassword, 10);
-    
     await this.prismaService.user.update({
       where: { id: userId },
       data: { passwordHash: newPasswordHash },
     });
-    
-    await this.createHistory(userId, 'CHANGE_PASSWORD', 'Password changed successfully');
+    await this.createHistory(userId, user.tenantId, 'CHANGE_PASSWORD', 'Password changed successfully');
   }
 
-  // ==================== EXCLUSÃO DE CONTA (SOFT DELETE - RECOMENDADO) ====================
   public async deleteUserAccount(userId: string): Promise<{ id: string; message: string }> {
-    // Verificar se o usuário existe
-    const user = await this.prismaService.user.findUnique({
-      where: { id: userId },
-    });
-
+    const user = await this.prismaService.user.findUnique({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException('Usuário não encontrado');
     }
-
-    // Verificar se o usuário já foi deletado
     if (user.deletedAt) {
       throw new BadRequestException('Conta já foi excluída anteriormente');
     }
 
-    // SOFT DELETE - Apenas marcar como deletado
-    const deletedUser = await this.prismaService.user.update({
+    const tenantId = user.tenantId;
+
+    await this.prismaService.session.updateMany({
+      where: { userId },
+      data: { expiresAt: new Date() },
+    });
+
+    await this.prismaService.user.update({
       where: { id: userId },
       data: {
         deletedAt: new Date(),
-        email: `deleted_${Date.now()}_${user.email}`, // Libera o email para reuso
+        email: `deleted_${Date.now()}_${user.email}`,
         fullName: '[Conta Excluída]',
       },
     });
 
-    // Invalidar todas as sessões do usuário
-    await this.prismaService.session.updateMany({
-      where: { userId },
-      data: { expiresAt: new Date() }, // Expira todas as sessões
+    await this.prismaService.userHistory.create({
+      data: {
+        userId,
+        tenantId,
+        action: 'ACCOUNT_DELETED',
+        metadata: `Conta excluída em ${new Date().toISOString()}`,
+      },
     });
-
-    // Registrar ação no histórico
-    await this.createHistory(
-      userId,
-      'ACCOUNT_DELETED',
-      `Conta excluída em ${new Date().toISOString()}`
-    );
-
-    console.log(`✅ Conta do usuário ${userId} excluída com sucesso`);
 
     return { id: userId, message: 'Conta excluída com sucesso' };
   }
 
-  // ==================== EXCLUSÃO DE CONTA (HARD DELETE - PERMANENTE) ====================
   public async deleteUser(userId: string): Promise<{ id: string }> {
-    const user = await this.prismaService.user.findUnique({
-      where: { id: userId },
-    });
-
+    const user = await this.prismaService.user.findUnique({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException('User not found');
     }
-
-    // HARD DELETE - Remove permanentemente
-    // ATENÇÃO: Isso pode quebrar referências em outras tabelas
-    await this.prismaService.user.delete({
-      where: { id: userId },
-    });
-
-    await this.createHistory(userId, 'ACCOUNT_HARD_DELETED', `Conta removida permanentemente em ${new Date().toISOString()}`);
-
-    console.log(`✅ Conta do usuário ${userId} removida permanentemente`);
-
+    await this.prismaService.user.delete({ where: { id: userId } });
     return { id: userId };
   }
 
@@ -649,7 +616,12 @@ export class SiteService {
     });
     const waitlistEntry = await this.prismaService.waitlistEntry.findUniqueOrThrow({ where: { id: waitlistId } });
     await this.prismaService.userHistory.create({
-      data: { action: 'WAITLIST_PROMOTED', metadata: appointmentId, userId: waitlistEntry.userId, tenantId: waitlistEntry.tenantId },
+      data: {
+        action: 'WAITLIST_PROMOTED',
+        metadata: appointmentId,
+        userId: waitlistEntry.userId,
+        tenantId: waitlistEntry.tenantId,
+      },
     });
     return { id: waitlistId };
   }
@@ -791,10 +763,14 @@ export class SiteService {
     });
   }
 
-  private async createHistory(userId: string, action: string, metadata: string): Promise<void> {
-    const user = await this.prismaService.user.findUnique({ where: { id: userId } });
+  private async createHistory(
+    userId: string,
+    tenantId: string | null,
+    action: string,
+    metadata: string,
+  ): Promise<void> {
     await this.prismaService.userHistory.create({
-      data: { userId, action, metadata, tenantId: user?.tenantId },
+      data: { userId, tenantId, action, metadata },
     });
   }
 

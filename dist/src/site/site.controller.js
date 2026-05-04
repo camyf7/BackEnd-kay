@@ -129,8 +129,8 @@ let SiteController = class SiteController {
     }
     async deleteMyAccount(authorization) {
         const user = this.extractAuthPayload(authorization);
-        await this.siteService.deleteUser(user.userId);
-        return { message: 'Conta excluída com sucesso' };
+        const result = await this.siteService.deleteUserAccount(user.userId);
+        return { message: result.message };
     }
     async listAdminAppointments(authorization) {
         this.assertAdmin(authorization);
@@ -397,7 +397,7 @@ __decorate([
 ], SiteController.prototype, "changeClientPassword", null);
 __decorate([
     (0, common_1.UseGuards)(auth_guard_1.AuthGuard),
-    (0, common_1.Delete)('client/me'),
+    (0, common_1.Delete)('client/account'),
     __param(0, (0, common_1.Headers)('authorization')),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [String]),

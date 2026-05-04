@@ -60,7 +60,7 @@ let SiteService = class SiteService {
         await this.prismaService.session.create({
             data: { userId: user.id, token, expiresAt, tenantId: user.tenantId },
         });
-        await this.createHistory(user.id, 'LOGIN', `Role: ${role}`);
+        await this.createHistory(user.id, user.tenantId, 'LOGIN', `Role: ${role}`);
         return { token };
     }
     async createService(input) {
@@ -152,7 +152,7 @@ let SiteService = class SiteService {
             action: 'create_or_update',
         });
         await this.notifyAdmins('New booking', `Appointment ${appointment.id} was created`);
-        await this.createHistory(userId, 'CREATE_APPOINTMENT', `Appointment ${appointment.id}`);
+        await this.createHistory(userId, tenant.id, 'CREATE_APPOINTMENT', `Appointment ${appointment.id}`);
         return { appointmentId: appointment.id, paymentId: payment.id };
     }
     async rescheduleAppointment(userId, appointmentId, newStart) {
@@ -181,7 +181,7 @@ let SiteService = class SiteService {
             idempotencyKey: `appointment-reschedule-${appointmentId}-v${appointment.version + 1}`,
             action: 'create_or_update',
         });
-        await this.createHistory(userId, 'RESCHEDULE_APPOINTMENT', `Appointment ${appointmentId}`);
+        await this.createHistory(userId, appointment.tenantId, 'RESCHEDULE_APPOINTMENT', `Appointment ${appointmentId}`);
         return { id: appointmentId };
     }
     async cancelAppointment(userId, appointmentId, reason) {
@@ -222,7 +222,7 @@ let SiteService = class SiteService {
             idempotencyKey: `appointment-cancel-${appointmentId}-v${appointment.version + 1}`,
             action: 'cancel',
         });
-        await this.createHistory(userId, 'CANCEL_APPOINTMENT', `Appointment ${appointmentId}`);
+        await this.createHistory(userId, appointment.tenantId, 'CANCEL_APPOINTMENT', `Appointment ${appointmentId}`);
         return { id: updatedAppointment.id, refundCreated };
     }
     canRefundAppointment(appointmentStart) {
@@ -256,7 +256,7 @@ let SiteService = class SiteService {
     async updateClientProfile(userId, data) {
         if (data.email) {
             const existingUser = await this.prismaService.user.findFirst({
-                where: { email: data.email, id: { not: userId } }
+                where: { email: data.email, id: { not: userId } },
             });
             if (existingUser) {
                 throw new common_1.BadRequestException('Email already in use');
@@ -281,9 +281,7 @@ let SiteService = class SiteService {
         if (!currentPassword || !newPassword) {
             throw new common_1.BadRequestException('Current password and new password are required');
         }
-        const user = await this.prismaService.user.findUnique({
-            where: { id: userId },
-        });
+        const user = await this.prismaService.user.findUnique({ where: { id: userId } });
         if (!user) {
             throw new common_1.NotFoundException('User not found');
         }
@@ -299,19 +297,22 @@ let SiteService = class SiteService {
             where: { id: userId },
             data: { passwordHash: newPasswordHash },
         });
-        await this.createHistory(userId, 'CHANGE_PASSWORD', 'Password changed successfully');
+        await this.createHistory(userId, user.tenantId, 'CHANGE_PASSWORD', 'Password changed successfully');
     }
     async deleteUserAccount(userId) {
-        const user = await this.prismaService.user.findUnique({
-            where: { id: userId },
-        });
+        const user = await this.prismaService.user.findUnique({ where: { id: userId } });
         if (!user) {
             throw new common_1.NotFoundException('Usuário não encontrado');
         }
         if (user.deletedAt) {
             throw new common_1.BadRequestException('Conta já foi excluída anteriormente');
         }
-        const deletedUser = await this.prismaService.user.update({
+        const tenantId = user.tenantId;
+        await this.prismaService.session.updateMany({
+            where: { userId },
+            data: { expiresAt: new Date() },
+        });
+        await this.prismaService.user.update({
             where: { id: userId },
             data: {
                 deletedAt: new Date(),
@@ -319,26 +320,22 @@ let SiteService = class SiteService {
                 fullName: '[Conta Excluída]',
             },
         });
-        await this.prismaService.session.updateMany({
-            where: { userId },
-            data: { expiresAt: new Date() },
+        await this.prismaService.userHistory.create({
+            data: {
+                userId,
+                tenantId,
+                action: 'ACCOUNT_DELETED',
+                metadata: `Conta excluída em ${new Date().toISOString()}`,
+            },
         });
-        await this.createHistory(userId, 'ACCOUNT_DELETED', `Conta excluída em ${new Date().toISOString()}`);
-        console.log(`✅ Conta do usuário ${userId} excluída com sucesso`);
         return { id: userId, message: 'Conta excluída com sucesso' };
     }
     async deleteUser(userId) {
-        const user = await this.prismaService.user.findUnique({
-            where: { id: userId },
-        });
+        const user = await this.prismaService.user.findUnique({ where: { id: userId } });
         if (!user) {
             throw new common_1.NotFoundException('User not found');
         }
-        await this.prismaService.user.delete({
-            where: { id: userId },
-        });
-        await this.createHistory(userId, 'ACCOUNT_HARD_DELETED', `Conta removida permanentemente em ${new Date().toISOString()}`);
-        console.log(`✅ Conta do usuário ${userId} removida permanentemente`);
+        await this.prismaService.user.delete({ where: { id: userId } });
         return { id: userId };
     }
     async listAdminAppointments() {
@@ -506,7 +503,12 @@ let SiteService = class SiteService {
         });
         const waitlistEntry = await this.prismaService.waitlistEntry.findUniqueOrThrow({ where: { id: waitlistId } });
         await this.prismaService.userHistory.create({
-            data: { action: 'WAITLIST_PROMOTED', metadata: appointmentId, userId: waitlistEntry.userId, tenantId: waitlistEntry.tenantId },
+            data: {
+                action: 'WAITLIST_PROMOTED',
+                metadata: appointmentId,
+                userId: waitlistEntry.userId,
+                tenantId: waitlistEntry.tenantId,
+            },
         });
         return { id: waitlistId };
     }
@@ -613,10 +615,9 @@ let SiteService = class SiteService {
             data: admins.map((admin) => ({ userId: admin.id, title, body, tenantId: admin.tenantId })),
         });
     }
-    async createHistory(userId, action, metadata) {
-        const user = await this.prismaService.user.findUnique({ where: { id: userId } });
+    async createHistory(userId, tenantId, action, metadata) {
         await this.prismaService.userHistory.create({
-            data: { userId, action, metadata, tenantId: user?.tenantId },
+            data: { userId, tenantId, action, metadata },
         });
     }
     async getUserAppointment(userId, appointmentId) {

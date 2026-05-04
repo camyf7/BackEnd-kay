@@ -18,7 +18,6 @@ import { AuthGuard } from './auth.guard';
 import {
   BlockDateDto,
   CancelAppointmentDto,
-  ChangePasswordDto,
   CreateAppointmentDto,
   CreateAvailabilityDto,
   CreateServiceDto,
@@ -257,7 +256,7 @@ export class SiteController {
   @Patch('client/password')
   public async changeClientPassword(
     @Headers('authorization') authorization: string,
-    @Body() body: { currentPassword: string; newPassword: string }
+    @Body() body: { currentPassword: string; newPassword: string },
   ): Promise<{ message: string }> {
     const user = this.extractAuthPayload(authorization);
     await this.siteService.changeClientPassword(user.userId, body.currentPassword, body.newPassword);
@@ -265,14 +264,14 @@ export class SiteController {
   }
 
   @UseGuards(AuthGuard)
-@Delete('client/me')
-public async deleteMyAccount(
-  @Headers('authorization') authorization: string,
-): Promise<{ message: string }> {
-  const user = this.extractAuthPayload(authorization);
-  await this.siteService.deleteUser(user.userId);
-  return { message: 'Conta excluída com sucesso' };
-}
+  @Delete('client/account')
+  public async deleteMyAccount(
+    @Headers('authorization') authorization: string,
+  ): Promise<{ message: string }> {
+    const user = this.extractAuthPayload(authorization);
+    const result = await this.siteService.deleteUserAccount(user.userId);
+    return { message: result.message };
+  }
 
   @UseGuards(AuthGuard)
   @Get('admin/appointments')
