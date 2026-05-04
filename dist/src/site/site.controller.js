@@ -110,9 +110,27 @@ let SiteController = class SiteController {
         const user = this.extractAuthPayload(authorization);
         return this.siteService.listInvoicesByUser(user.userId);
     }
+    async getClientProfile(authorization) {
+        const user = this.extractAuthPayload(authorization);
+        return this.siteService.getClientProfile(user.userId);
+    }
+    async updateClientProfile(authorization, body) {
+        const user = this.extractAuthPayload(authorization);
+        return this.siteService.updateClientProfile(user.userId, body);
+    }
     async createWaitlistEntry(authorization, body) {
         const user = this.extractAuthPayload(authorization);
         return this.siteService.createWaitlistEntry(user.userId, body);
+    }
+    async changeClientPassword(authorization, body) {
+        const user = this.extractAuthPayload(authorization);
+        await this.siteService.changeClientPassword(user.userId, body.currentPassword, body.newPassword);
+        return { message: 'Password changed successfully' };
+    }
+    async deleteMyAccount(authorization) {
+        const user = this.extractAuthPayload(authorization);
+        await this.siteService.deleteUser(user.userId);
+        return { message: 'Conta excluída com sucesso' };
     }
     async listAdminAppointments(authorization) {
         this.assertAdmin(authorization);
@@ -344,6 +362,23 @@ __decorate([
 ], SiteController.prototype, "listClientInvoices", null);
 __decorate([
     (0, common_1.UseGuards)(auth_guard_1.AuthGuard),
+    (0, common_1.Get)('client/profile'),
+    __param(0, (0, common_1.Headers)('authorization')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], SiteController.prototype, "getClientProfile", null);
+__decorate([
+    (0, common_1.UseGuards)(auth_guard_1.AuthGuard),
+    (0, common_1.Patch)('client/profile'),
+    __param(0, (0, common_1.Headers)('authorization')),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], SiteController.prototype, "updateClientProfile", null);
+__decorate([
+    (0, common_1.UseGuards)(auth_guard_1.AuthGuard),
     (0, common_1.Post)('client/waitlist'),
     __param(0, (0, common_1.Headers)('authorization')),
     __param(1, (0, common_1.Body)()),
@@ -351,6 +386,23 @@ __decorate([
     __metadata("design:paramtypes", [String, site_dto_1.WaitlistDto]),
     __metadata("design:returntype", Promise)
 ], SiteController.prototype, "createWaitlistEntry", null);
+__decorate([
+    (0, common_1.UseGuards)(auth_guard_1.AuthGuard),
+    (0, common_1.Patch)('client/password'),
+    __param(0, (0, common_1.Headers)('authorization')),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], SiteController.prototype, "changeClientPassword", null);
+__decorate([
+    (0, common_1.UseGuards)(auth_guard_1.AuthGuard),
+    (0, common_1.Delete)('client/me'),
+    __param(0, (0, common_1.Headers)('authorization')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], SiteController.prototype, "deleteMyAccount", null);
 __decorate([
     (0, common_1.UseGuards)(auth_guard_1.AuthGuard),
     (0, common_1.Get)('admin/appointments'),

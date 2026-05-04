@@ -236,6 +236,111 @@ let SiteService = class SiteService {
             orderBy: { appointmentStart: 'desc' },
         });
     }
+    async getClientProfile(userId) {
+        const user = await this.prismaService.user.findUnique({
+            where: { id: userId },
+            select: {
+                id: true,
+                fullName: true,
+                email: true,
+                role: true,
+                createdAt: true,
+                updatedAt: true,
+            },
+        });
+        if (!user) {
+            throw new common_1.NotFoundException('User not found');
+        }
+        return user;
+    }
+    async updateClientProfile(userId, data) {
+        if (data.email) {
+            const existingUser = await this.prismaService.user.findFirst({
+                where: { email: data.email, id: { not: userId } }
+            });
+            if (existingUser) {
+                throw new common_1.BadRequestException('Email already in use');
+            }
+        }
+        return this.prismaService.user.update({
+            where: { id: userId },
+            data: {
+                ...(data.fullName && { fullName: data.fullName }),
+                ...(data.email && { email: data.email }),
+            },
+            select: {
+                id: true,
+                fullName: true,
+                email: true,
+                role: true,
+                updatedAt: true,
+            },
+        });
+    }
+    async changeClientPassword(userId, currentPassword, newPassword) {
+        if (!currentPassword || !newPassword) {
+            throw new common_1.BadRequestException('Current password and new password are required');
+        }
+        const user = await this.prismaService.user.findUnique({
+            where: { id: userId },
+        });
+        if (!user) {
+            throw new common_1.NotFoundException('User not found');
+        }
+        const isValidPassword = await (0, bcryptjs_1.compare)(currentPassword, user.passwordHash);
+        if (!isValidPassword) {
+            throw new common_1.UnauthorizedException('Current password is incorrect');
+        }
+        if (newPassword.length < 6) {
+            throw new common_1.BadRequestException('New password must be at least 6 characters long');
+        }
+        const newPasswordHash = await (0, bcryptjs_1.hash)(newPassword, 10);
+        await this.prismaService.user.update({
+            where: { id: userId },
+            data: { passwordHash: newPasswordHash },
+        });
+        await this.createHistory(userId, 'CHANGE_PASSWORD', 'Password changed successfully');
+    }
+    async deleteUserAccount(userId) {
+        const user = await this.prismaService.user.findUnique({
+            where: { id: userId },
+        });
+        if (!user) {
+            throw new common_1.NotFoundException('Usuário não encontrado');
+        }
+        if (user.deletedAt) {
+            throw new common_1.BadRequestException('Conta já foi excluída anteriormente');
+        }
+        const deletedUser = await this.prismaService.user.update({
+            where: { id: userId },
+            data: {
+                deletedAt: new Date(),
+                email: `deleted_${Date.now()}_${user.email}`,
+                fullName: '[Conta Excluída]',
+            },
+        });
+        await this.prismaService.session.updateMany({
+            where: { userId },
+            data: { expiresAt: new Date() },
+        });
+        await this.createHistory(userId, 'ACCOUNT_DELETED', `Conta excluída em ${new Date().toISOString()}`);
+        console.log(`✅ Conta do usuário ${userId} excluída com sucesso`);
+        return { id: userId, message: 'Conta excluída com sucesso' };
+    }
+    async deleteUser(userId) {
+        const user = await this.prismaService.user.findUnique({
+            where: { id: userId },
+        });
+        if (!user) {
+            throw new common_1.NotFoundException('User not found');
+        }
+        await this.prismaService.user.delete({
+            where: { id: userId },
+        });
+        await this.createHistory(userId, 'ACCOUNT_HARD_DELETED', `Conta removida permanentemente em ${new Date().toISOString()}`);
+        console.log(`✅ Conta do usuário ${userId} removida permanentemente`);
+        return { id: userId };
+    }
     async listAdminAppointments() {
         return this.prismaService.appointment.findMany({
             include: { service: true, user: true, payments: true },
@@ -363,6 +468,30 @@ let SiteService = class SiteService {
             select: { id: true },
         });
     }
+    async getAvailableSlots(params) {
+        const service = await this.prismaService.service.findUnique({ where: { id: params.serviceId } });
+        if (!service) {
+            throw new common_1.NotFoundException('Service not found');
+        }
+        const weekDay = luxon_1.DateTime.fromJSDate(params.date, { zone: params.timezone }).weekday % 7;
+        const windows = await this.prismaService.availability.findMany({
+            where: { weekDay, isActive: true, deletedAt: null },
+            orderBy: { startTime: 'asc' },
+        });
+        const slots = [];
+        for (const window of windows) {
+            let current = luxon_1.DateTime.fromISO(`${luxon_1.DateTime.fromJSDate(params.date, { zone: params.timezone }).toISODate()}T${window.startTime}`, { zone: params.timezone });
+            const end = luxon_1.DateTime.fromISO(`${luxon_1.DateTime.fromJSDate(params.date, { zone: params.timezone }).toISODate()}T${window.endTime}`, { zone: params.timezone });
+            while (current.plus({ minutes: service.durationInMinutes }) <= end) {
+                slots.push({
+                    start: current.toUTC().toISO() ?? '',
+                    end: current.plus({ minutes: service.durationInMinutes }).toUTC().toISO() ?? '',
+                });
+                current = current.plus({ minutes: service.durationInMinutes });
+            }
+        }
+        return slots;
+    }
     async createWaitlistEntry(userId, input) {
         const tenant = await this.getTenantByUser(userId);
         return this.prismaService.waitlistEntry.create({
@@ -375,13 +504,11 @@ let SiteService = class SiteService {
             where: { id: waitlistId },
             data: { status: 'promoted' },
         });
+        const waitlistEntry = await this.prismaService.waitlistEntry.findUniqueOrThrow({ where: { id: waitlistId } });
         await this.prismaService.userHistory.create({
-            data: { action: 'WAITLIST_PROMOTED', metadata: appointmentId, userId: (await this.prismaService.waitlistEntry.findUniqueOrThrow({ where: { id: waitlistId } })).userId },
+            data: { action: 'WAITLIST_PROMOTED', metadata: appointmentId, userId: waitlistEntry.userId, tenantId: waitlistEntry.tenantId },
         });
         return { id: waitlistId };
-    }
-    async processPaymentWebhook(input) {
-        return this.paymentWebhookService.processWebhook(input);
     }
     async upsertTenantSettings(input) {
         const existingTenant = await this.prismaService.tenant.findFirst({ orderBy: { createdAt: 'asc' } });
@@ -420,29 +547,8 @@ let SiteService = class SiteService {
             select: { id: true },
         });
     }
-    async getAvailableSlots(params) {
-        const service = await this.prismaService.service.findUnique({ where: { id: params.serviceId } });
-        if (!service) {
-            throw new common_1.NotFoundException('Service not found');
-        }
-        const weekDay = luxon_1.DateTime.fromJSDate(params.date, { zone: params.timezone }).weekday % 7;
-        const windows = await this.prismaService.availability.findMany({
-            where: { weekDay, isActive: true, deletedAt: null },
-            orderBy: { startTime: 'asc' },
-        });
-        const slots = [];
-        for (const window of windows) {
-            let current = luxon_1.DateTime.fromISO(`${luxon_1.DateTime.fromJSDate(params.date, { zone: params.timezone }).toISODate()}T${window.startTime}`, { zone: params.timezone });
-            const end = luxon_1.DateTime.fromISO(`${luxon_1.DateTime.fromJSDate(params.date, { zone: params.timezone }).toISODate()}T${window.endTime}`, { zone: params.timezone });
-            while (current.plus({ minutes: service.durationInMinutes }) <= end) {
-                slots.push({
-                    start: current.toUTC().toISO() ?? '',
-                    end: current.plus({ minutes: service.durationInMinutes }).toUTC().toISO() ?? '',
-                });
-                current = current.plus({ minutes: service.durationInMinutes });
-            }
-        }
-        return slots;
+    async processPaymentWebhook(input) {
+        return this.paymentWebhookService.processWebhook(input);
     }
     async validateAppointmentAvailability(appointmentStart, durationInMinutes, ignoredAppointmentId = '', tenantId = null, timezone = 'America/Sao_Paulo') {
         const appointmentEnd = new Date(appointmentStart.getTime() + durationInMinutes * 60 * 1000);
@@ -508,8 +614,9 @@ let SiteService = class SiteService {
         });
     }
     async createHistory(userId, action, metadata) {
+        const user = await this.prismaService.user.findUnique({ where: { id: userId } });
         await this.prismaService.userHistory.create({
-            data: { userId, action, metadata, tenantId: (await this.prismaService.user.findUnique({ where: { id: userId } }))?.tenantId },
+            data: { userId, action, metadata, tenantId: user?.tenantId },
         });
     }
     async getUserAppointment(userId, appointmentId) {

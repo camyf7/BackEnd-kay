@@ -61,8 +61,22 @@ export declare class SiteController {
     }>;
     listClientAppointments(authorization: string): Promise<unknown[]>;
     listClientInvoices(authorization: string): Promise<unknown[]>;
+    getClientProfile(authorization: string): Promise<unknown>;
+    updateClientProfile(authorization: string, body: {
+        fullName?: string;
+        email?: string;
+    }): Promise<unknown>;
     createWaitlistEntry(authorization: string, body: WaitlistDto): Promise<{
         id: string;
+    }>;
+    changeClientPassword(authorization: string, body: {
+        currentPassword: string;
+        newPassword: string;
+    }): Promise<{
+        message: string;
+    }>;
+    deleteMyAccount(authorization: string): Promise<{
+        message: string;
     }>;
     listAdminAppointments(authorization: string): Promise<unknown[]>;
     listUsers(authorization: string): Promise<unknown[]>;

@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TenantSettingsDto = exports.WaitlistDto = exports.PaymentWebhookDto = exports.GoogleCalendarConnectDto = exports.CancelAppointmentDto = exports.RescheduleDto = exports.CreateAppointmentDto = exports.BlockDateDto = exports.CreateAvailabilityDto = exports.UpdateServiceDto = exports.CreateServiceDto = exports.LoginDto = exports.RegisterDto = void 0;
+exports.ChangePasswordDto = exports.TenantSettingsDto = exports.WaitlistDto = exports.PaymentWebhookDto = exports.GoogleCalendarConnectDto = exports.CancelAppointmentDto = exports.RescheduleDto = exports.CreateAppointmentDto = exports.BlockDateDto = exports.CreateAvailabilityDto = exports.UpdateServiceDto = exports.CreateServiceDto = exports.LoginDto = exports.RegisterDto = void 0;
 const class_transformer_1 = require("class-transformer");
 const class_validator_1 = require("class-validator");
 class RegisterDto {
@@ -372,4 +372,9 @@ __decorate([
     (0, class_validator_1.IsNotEmpty)(),
     __metadata("design:type", String)
 ], TenantSettingsDto.prototype, "paymentMethods", void 0);
+class ChangePasswordDto {
+    currentPassword;
+    newPassword;
+}
+exports.ChangePasswordDto = ChangePasswordDto;
 //# sourceMappingURL=site.dto.js.map

@@ -77,3 +77,7 @@ export declare class TenantSettingsDto {
     bookingSignalPercentage: number;
     paymentMethods: string;
 }
+export declare class ChangePasswordDto {
+    currentPassword: string;
+    newPassword: string;
+}

@@ -69,6 +69,19 @@ export declare class SiteService {
     }>;
     canRefundAppointment(appointmentStart: Date): boolean;
     listClientAppointments(userId: string): Promise<unknown[]>;
+    getClientProfile(userId: string): Promise<unknown>;
+    updateClientProfile(userId: string, data: {
+        fullName?: string;
+        email?: string;
+    }): Promise<unknown>;
+    changeClientPassword(userId: string, currentPassword: string, newPassword: string): Promise<void>;
+    deleteUserAccount(userId: string): Promise<{
+        id: string;
+        message: string;
+    }>;
+    deleteUser(userId: string): Promise<{
+        id: string;
+    }>;
     listAdminAppointments(): Promise<unknown[]>;
     listUsers(): Promise<unknown[]>;
     listPayments(): Promise<unknown[]>;
@@ -92,6 +105,14 @@ export declare class SiteService {
     }): Promise<{
         id: string;
     }>;
+    getAvailableSlots(params: {
+        serviceId: string;
+        date: Date;
+        timezone: string;
+    }): Promise<{
+        start: string;
+        end: string;
+    }[]>;
     createWaitlistEntry(userId: string, input: {
         serviceId: string;
         preferredStartDate: Date;
@@ -100,16 +121,6 @@ export declare class SiteService {
         id: string;
     }>;
     promoteWaitlistEntry(waitlistId: string, appointmentId: string): Promise<{
-        id: string;
-    }>;
-    processPaymentWebhook(input: {
-        tenantId: string | null;
-        provider: string;
-        eventId: string;
-        eventName: string;
-        paymentId?: string;
-        payload: Record<string, unknown>;
-    }): Promise<{
         id: string;
     }>;
     upsertTenantSettings(input: {
@@ -126,14 +137,16 @@ export declare class SiteService {
     }): Promise<{
         id: string;
     }>;
-    getAvailableSlots(params: {
-        serviceId: string;
-        date: Date;
-        timezone: string;
+    processPaymentWebhook(input: {
+        tenantId: string | null;
+        provider: string;
+        eventId: string;
+        eventName: string;
+        paymentId?: string;
+        payload: Record<string, unknown>;
     }): Promise<{
-        start: string;
-        end: string;
-    }[]>;
+        id: string;
+    }>;
     private validateAppointmentAvailability;
     private createInvoice;
     private notifyAdmins;

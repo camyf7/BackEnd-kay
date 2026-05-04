@@ -19,9 +19,6 @@ const HOURS_48_IN_MILLISECONDS: number = 48 * 60 * 60 * 1000;
 const PERCENTAGE_DIVISOR: number = 100;
 
 @Injectable()
-/**
- * Handles authentication, scheduling, payments, and financial operations.
- */
 export class SiteService {
   public constructor(
     private readonly prismaService: PrismaService,
@@ -30,7 +27,6 @@ export class SiteService {
     private readonly paymentWebhookService: PaymentWebhookService,
   ) {}
 
-  /** Registers a new user by role. */
   public async registerUser(input: RegisterInput, role: UserRole): Promise<{ id: string }> {
     const tenant = await this.getOrCreateDefaultTenant();
     const passwordHash: string = await hash(input.password, 10);
@@ -47,7 +43,6 @@ export class SiteService {
     return createdUser;
   }
 
-  /** Authenticates a user and stores session information. */
   public async loginUser(input: LoginInput, role: UserRole): Promise<{ token: string }> {
     const user = await this.prismaService.user.findUnique({ where: { email: input.email } });
     if (!user || user.role !== role) {
@@ -300,6 +295,158 @@ export class SiteService {
     });
   }
 
+  public async getClientProfile(userId: string): Promise<unknown> {
+    const user = await this.prismaService.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        role: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    
+    return user;
+  }
+
+  public async updateClientProfile(
+    userId: string,
+    data: { fullName?: string; email?: string }
+  ): Promise<unknown> {
+    if (data.email) {
+      const existingUser = await this.prismaService.user.findFirst({
+        where: { email: data.email, id: { not: userId } }
+      });
+      if (existingUser) {
+        throw new BadRequestException('Email already in use');
+      }
+    }
+
+    return this.prismaService.user.update({
+      where: { id: userId },
+      data: {
+        ...(data.fullName && { fullName: data.fullName }),
+        ...(data.email && { email: data.email }),
+      },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        role: true,
+        updatedAt: true,
+      },
+    });
+  }
+
+  public async changeClientPassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string
+  ): Promise<void> {
+    if (!currentPassword || !newPassword) {
+      throw new BadRequestException('Current password and new password are required');
+    }
+
+    const user = await this.prismaService.user.findUnique({
+      where: { id: userId },
+    });
+    
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    
+    const isValidPassword = await compare(currentPassword, user.passwordHash);
+    if (!isValidPassword) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+    
+    if (newPassword.length < 6) {
+      throw new BadRequestException('New password must be at least 6 characters long');
+    }
+    
+    const newPasswordHash = await hash(newPassword, 10);
+    
+    await this.prismaService.user.update({
+      where: { id: userId },
+      data: { passwordHash: newPasswordHash },
+    });
+    
+    await this.createHistory(userId, 'CHANGE_PASSWORD', 'Password changed successfully');
+  }
+
+  // ==================== EXCLUSÃO DE CONTA (SOFT DELETE - RECOMENDADO) ====================
+  public async deleteUserAccount(userId: string): Promise<{ id: string; message: string }> {
+    // Verificar se o usuário existe
+    const user = await this.prismaService.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('Usuário não encontrado');
+    }
+
+    // Verificar se o usuário já foi deletado
+    if (user.deletedAt) {
+      throw new BadRequestException('Conta já foi excluída anteriormente');
+    }
+
+    // SOFT DELETE - Apenas marcar como deletado
+    const deletedUser = await this.prismaService.user.update({
+      where: { id: userId },
+      data: {
+        deletedAt: new Date(),
+        email: `deleted_${Date.now()}_${user.email}`, // Libera o email para reuso
+        fullName: '[Conta Excluída]',
+      },
+    });
+
+    // Invalidar todas as sessões do usuário
+    await this.prismaService.session.updateMany({
+      where: { userId },
+      data: { expiresAt: new Date() }, // Expira todas as sessões
+    });
+
+    // Registrar ação no histórico
+    await this.createHistory(
+      userId,
+      'ACCOUNT_DELETED',
+      `Conta excluída em ${new Date().toISOString()}`
+    );
+
+    console.log(`✅ Conta do usuário ${userId} excluída com sucesso`);
+
+    return { id: userId, message: 'Conta excluída com sucesso' };
+  }
+
+  // ==================== EXCLUSÃO DE CONTA (HARD DELETE - PERMANENTE) ====================
+  public async deleteUser(userId: string): Promise<{ id: string }> {
+    const user = await this.prismaService.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    // HARD DELETE - Remove permanentemente
+    // ATENÇÃO: Isso pode quebrar referências em outras tabelas
+    await this.prismaService.user.delete({
+      where: { id: userId },
+    });
+
+    await this.createHistory(userId, 'ACCOUNT_HARD_DELETED', `Conta removida permanentemente em ${new Date().toISOString()}`);
+
+    console.log(`✅ Conta do usuário ${userId} removida permanentemente`);
+
+    return { id: userId };
+  }
+
   public async listAdminAppointments(): Promise<unknown[]> {
     return this.prismaService.appointment.findMany({
       include: { service: true, user: true, payments: true },
@@ -449,6 +596,41 @@ export class SiteService {
     });
   }
 
+  public async getAvailableSlots(params: {
+    serviceId: string;
+    date: Date;
+    timezone: string;
+  }): Promise<{ start: string; end: string }[]> {
+    const service = await this.prismaService.service.findUnique({ where: { id: params.serviceId } });
+    if (!service) {
+      throw new NotFoundException('Service not found');
+    }
+    const weekDay = DateTime.fromJSDate(params.date, { zone: params.timezone }).weekday % 7;
+    const windows = await this.prismaService.availability.findMany({
+      where: { weekDay, isActive: true, deletedAt: null },
+      orderBy: { startTime: 'asc' },
+    });
+    const slots: { start: string; end: string }[] = [];
+    for (const window of windows) {
+      let current = DateTime.fromISO(
+        `${DateTime.fromJSDate(params.date, { zone: params.timezone }).toISODate()}T${window.startTime}`,
+        { zone: params.timezone },
+      );
+      const end = DateTime.fromISO(
+        `${DateTime.fromJSDate(params.date, { zone: params.timezone }).toISODate()}T${window.endTime}`,
+        { zone: params.timezone },
+      );
+      while (current.plus({ minutes: service.durationInMinutes }) <= end) {
+        slots.push({
+          start: current.toUTC().toISO() ?? '',
+          end: current.plus({ minutes: service.durationInMinutes }).toUTC().toISO() ?? '',
+        });
+        current = current.plus({ minutes: service.durationInMinutes });
+      }
+    }
+    return slots;
+  }
+
   public async createWaitlistEntry(
     userId: string,
     input: { serviceId: string; preferredStartDate: Date; preferredEndDate: Date },
@@ -465,21 +647,11 @@ export class SiteService {
       where: { id: waitlistId },
       data: { status: 'promoted' },
     });
+    const waitlistEntry = await this.prismaService.waitlistEntry.findUniqueOrThrow({ where: { id: waitlistId } });
     await this.prismaService.userHistory.create({
-      data: { action: 'WAITLIST_PROMOTED', metadata: appointmentId, userId: (await this.prismaService.waitlistEntry.findUniqueOrThrow({ where: { id: waitlistId } })).userId },
+      data: { action: 'WAITLIST_PROMOTED', metadata: appointmentId, userId: waitlistEntry.userId, tenantId: waitlistEntry.tenantId },
     });
     return { id: waitlistId };
-  }
-
-  public async processPaymentWebhook(input: {
-    tenantId: string | null;
-    provider: string;
-    eventId: string;
-    eventName: string;
-    paymentId?: string;
-    payload: Record<string, unknown>;
-  }): Promise<{ id: string }> {
-    return this.paymentWebhookService.processWebhook(input);
   }
 
   public async upsertTenantSettings(input: {
@@ -531,39 +703,15 @@ export class SiteService {
     });
   }
 
-  public async getAvailableSlots(params: {
-    serviceId: string;
-    date: Date;
-    timezone: string;
-  }): Promise<{ start: string; end: string }[]> {
-    const service = await this.prismaService.service.findUnique({ where: { id: params.serviceId } });
-    if (!service) {
-      throw new NotFoundException('Service not found');
-    }
-    const weekDay = DateTime.fromJSDate(params.date, { zone: params.timezone }).weekday % 7;
-    const windows = await this.prismaService.availability.findMany({
-      where: { weekDay, isActive: true, deletedAt: null },
-      orderBy: { startTime: 'asc' },
-    });
-    const slots: { start: string; end: string }[] = [];
-    for (const window of windows) {
-      let current = DateTime.fromISO(
-        `${DateTime.fromJSDate(params.date, { zone: params.timezone }).toISODate()}T${window.startTime}`,
-        { zone: params.timezone },
-      );
-      const end = DateTime.fromISO(
-        `${DateTime.fromJSDate(params.date, { zone: params.timezone }).toISODate()}T${window.endTime}`,
-        { zone: params.timezone },
-      );
-      while (current.plus({ minutes: service.durationInMinutes }) <= end) {
-        slots.push({
-          start: current.toUTC().toISO() ?? '',
-          end: current.plus({ minutes: service.durationInMinutes }).toUTC().toISO() ?? '',
-        });
-        current = current.plus({ minutes: service.durationInMinutes });
-      }
-    }
-    return slots;
+  public async processPaymentWebhook(input: {
+    tenantId: string | null;
+    provider: string;
+    eventId: string;
+    eventName: string;
+    paymentId?: string;
+    payload: Record<string, unknown>;
+  }): Promise<{ id: string }> {
+    return this.paymentWebhookService.processWebhook(input);
   }
 
   private async validateAppointmentAvailability(
@@ -644,8 +792,9 @@ export class SiteService {
   }
 
   private async createHistory(userId: string, action: string, metadata: string): Promise<void> {
+    const user = await this.prismaService.user.findUnique({ where: { id: userId } });
     await this.prismaService.userHistory.create({
-      data: { userId, action, metadata, tenantId: (await this.prismaService.user.findUnique({ where: { id: userId } }))?.tenantId },
+      data: { userId, action, metadata, tenantId: user?.tenantId },
     });
   }
 

@@ -18,6 +18,7 @@ import { AuthGuard } from './auth.guard';
 import {
   BlockDateDto,
   CancelAppointmentDto,
+  ChangePasswordDto,
   CreateAppointmentDto,
   CreateAvailabilityDto,
   CreateServiceDto,
@@ -224,6 +225,25 @@ export class SiteController {
   }
 
   @UseGuards(AuthGuard)
+  @Get('client/profile')
+  public async getClientProfile(
+    @Headers('authorization') authorization: string,
+  ): Promise<unknown> {
+    const user = this.extractAuthPayload(authorization);
+    return this.siteService.getClientProfile(user.userId);
+  }
+
+  @UseGuards(AuthGuard)
+  @Patch('client/profile')
+  public async updateClientProfile(
+    @Headers('authorization') authorization: string,
+    @Body() body: { fullName?: string; email?: string },
+  ): Promise<unknown> {
+    const user = this.extractAuthPayload(authorization);
+    return this.siteService.updateClientProfile(user.userId, body);
+  }
+
+  @UseGuards(AuthGuard)
   @Post('client/waitlist')
   public async createWaitlistEntry(
     @Headers('authorization') authorization: string,
@@ -232,6 +252,27 @@ export class SiteController {
     const user = this.extractAuthPayload(authorization);
     return this.siteService.createWaitlistEntry(user.userId, body);
   }
+
+  @UseGuards(AuthGuard)
+  @Patch('client/password')
+  public async changeClientPassword(
+    @Headers('authorization') authorization: string,
+    @Body() body: { currentPassword: string; newPassword: string }
+  ): Promise<{ message: string }> {
+    const user = this.extractAuthPayload(authorization);
+    await this.siteService.changeClientPassword(user.userId, body.currentPassword, body.newPassword);
+    return { message: 'Password changed successfully' };
+  }
+
+  @UseGuards(AuthGuard)
+@Delete('client/me')
+public async deleteMyAccount(
+  @Headers('authorization') authorization: string,
+): Promise<{ message: string }> {
+  const user = this.extractAuthPayload(authorization);
+  await this.siteService.deleteUser(user.userId);
+  return { message: 'Conta excluída com sucesso' };
+}
 
   @UseGuards(AuthGuard)
   @Get('admin/appointments')
