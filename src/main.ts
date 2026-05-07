@@ -9,9 +9,9 @@ async function bootstrap(): Promise<void> {
 
   // 🔥 LIBERA FRONT (Vite)
   app.enableCors({
-    origin: "http://localhost:5173",
-    credentials: true,
-  });
+  origin: process.env.FRONTEND_URL ?? 'http://localhost:5173',
+  credentials: true,
+});
 
   // ✅ validação global
   app.useGlobalPipes(
@@ -38,9 +38,9 @@ async function bootstrap(): Promise<void> {
   await prismaService.enableShutdownHooks(app);
 
   // 🚀 PORTA FIXA (evita bug do 5000 ocupado)
-  await app.listen(3000);
+ await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
 
-  console.log("🚀 Backend rodando em http://localhost:3000");
+ console.log(`🚀 Backend rodando na porta ${process.env.PORT ?? 3000}`);
 }
 
 bootstrap();
